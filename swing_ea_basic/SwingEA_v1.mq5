@@ -173,12 +173,28 @@ int OnInit()
 
    // Check if we have at least some symbols working
    if (emaSuccessCount == 0 || atrSuccessCount == 0) {
-      Print("CRITICAL ERROR: No symbols could be initialized!");
-      return INIT_FAILED;
+      Print("WARNING: No symbols could be initialized on first try!");
+      Print("This is often caused by missing history data or symbols not in Market Watch.");
+      Print("The EA will continue to run and retry symbol initialization.");
+      Print("Please ensure symbols are added to Market Watch and have H4 history data.");
+      // Don't fail - allow EA to continue and retry later
    }
 
    if (emaSuccessCount < ArraySize(symbols)) {
       Print("WARNING: Not all symbols available. EA will trade on ", emaSuccessCount, " symbols.");
+   }
+
+   // Show initialization result on chart immediately
+   if (emaSuccessCount == 0) {
+      Comment("⚠️ SwingEA v1.0 - Initialization Warning\n\n" +
+              "No symbols could be initialized!\n" +
+              "Common causes:\n" +
+              "1. Symbols not in Market Watch\n" +
+              "2. Missing H4 history data\n" +
+              "3. Broker doesn't support these symbols\n\n" +
+              "Please add symbols to Market Watch and\n" +
+              "ensure H4 data is available.\n\n" +
+              "EA will retry on next timer event.");
    }
 
    // Validate all symbols
@@ -215,6 +231,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   // Step 0: Retry initialization for failed symbols (if any)
+   RetryFailedSymbolInitialization();
+
    // Step 1: Check trading window
    if (!IsInTradingWindow()) {
       return;
@@ -1953,6 +1972,73 @@ bool RecoverFromRestart()
    return true;
 }
 
+/**
+ * RetryFailedSymbolInitialization - Retry initialization for symbols with invalid handles
+ *
+ * This function is called on every timer event to retry initialization of symbols
+ * that failed during OnInit() or lost their handles during runtime.
+ * Common causes for failed initialization:
+ * - Symbols not in Market Watch
+ * - Missing history data
+ * - Broker connection issues during startup
+ *
+ * @return Number of symbols successfully (re)initialized
+ */
+int RetryFailedSymbolInitialization()
+{
+   static datetime lastRetryTime = 0;
+   static int retryCount = 0;
+
+   // Only retry every 5 minutes to avoid spam
+   if (TimeCurrent() - lastRetryTime < 300) {
+      return 0;
+   }
+
+   int successCount = 0;
+   int totalInvalid = 0;
+
+   // Check all symbols for invalid handles
+   for (int i = 0; i < ArraySize(symbols); i++) {
+      if (emaHandles[i] == INVALID_HANDLE || atrHandles[i] == INVALID_HANDLE) {
+         totalInvalid++;
+
+         // Try to select symbol
+         if (!SymbolSelect(symbols[i], true)) {
+            continue; // Symbol still not available
+         }
+
+         // Retry EMA handle creation
+         if (emaHandles[i] == INVALID_HANDLE) {
+            emaHandles[i] = iMA(symbols[i], PERIOD_H4, EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
+            if (emaHandles[i] != INVALID_HANDLE) {
+               Print("[RetryInit] ✓ Successfully created EMA handle for ", symbols[i]);
+            }
+         }
+
+         // Retry ATR handle creation
+         if (atrHandles[i] == INVALID_HANDLE && emaHandles[i] != INVALID_HANDLE) {
+            atrHandles[i] = iATR(symbols[i], PERIOD_H4, ATR_Period);
+            if (atrHandles[i] != INVALID_HANDLE) {
+               Print("[RetryInit] ✓ Successfully created ATR handle for ", symbols[i]);
+            }
+         }
+
+         // Count as success if both handles are now valid
+         if (emaHandles[i] != INVALID_HANDLE && atrHandles[i] != INVALID_HANDLE) {
+            successCount++;
+         }
+      }
+   }
+
+   if (totalInvalid > 0) {
+      lastRetryTime = TimeCurrent();
+      retryCount++;
+      Print("[RetryInit] Retry #", retryCount, ": ", successCount, "/", totalInvalid, " symbols initialized");
+   }
+
+   return successCount;
+}
+
 //+------------------------------------------------------------------+
 //| Logging & Dashboard Functions                                    |
 //+------------------------------------------------------------------+
@@ -2089,6 +2175,28 @@ void UpdateDashboard()
    dashText += "╔════════════════════════════════════════════════════╗\n";
    dashText += "║         SwingEA v1.0 - Trading Dashboard         ║\n";
    dashText += "╚════════════════════════════════════════════════════╝\n";
+
+   // ===== SYMBOL INITIALIZATION STATUS =====
+   int validHandles = 0;
+   int invalidHandles = 0;
+   for (int i = 0; i < ArraySize(symbols); i++) {
+      if (emaHandles[i] != INVALID_HANDLE && atrHandles[i] != INVALID_HANDLE) {
+         validHandles++;
+      } else {
+         invalidHandles++;
+      }
+   }
+
+   if (invalidHandles > 0) {
+      dashText += "\n[SYMBOL STATUS]\n";
+      dashText += "⚠️ Symbols ready: " + IntegerToString(validHandles) + "/" +
+                  IntegerToString(ArraySize(symbols)) + "\n";
+      dashText += "Initializing: " + IntegerToString(invalidHandles) + " symbols\n";
+      dashText += "(Auto-retry every 5 minutes)\n";
+   } else {
+      dashText += "\n[SYMBOL STATUS]\n";
+      dashText += "✓ All " + IntegerToString(validHandles) + " symbols ready\n";
+   }
 
    // ===== ACCOUNT SECTION =====
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
