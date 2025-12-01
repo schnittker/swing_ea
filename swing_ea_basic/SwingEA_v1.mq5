@@ -104,6 +104,12 @@ double equityPeak = 0.0;
 double currentDD = 0.0;
 double currentRisk = 1.0;
 
+// Account-specific global variable name for equity peak
+string GetEquityPeakVarName()
+{
+   return "EA_EquityPeak_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+}
+
 //+------------------------------------------------------------------+
 //| Indicator Handles                                                  |
 //+------------------------------------------------------------------+
@@ -1467,9 +1473,9 @@ void UpdateTrailingDD()
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
    // Initialize or update equity peak
-   if (!GlobalVariableCheck("EA_EquityPeak")) {
+   if (!GlobalVariableCheck(GetEquityPeakVarName())) {
       // First time initialization
-      GlobalVariableSet("EA_EquityPeak", equity);
+      GlobalVariableSet(GetEquityPeakVarName(), equity);
       equityPeak = equity;
       currentDD = 0.0;
       currentRisk = RiskPercent_Normal;
@@ -1478,12 +1484,12 @@ void UpdateTrailingDD()
    }
 
    // Get peak from global variable
-   equityPeak = GlobalVariableGet("EA_EquityPeak");
+   equityPeak = GlobalVariableGet(GetEquityPeakVarName());
 
    // Update peak if current equity is higher
    if (equity > equityPeak) {
       equityPeak = equity;
-      GlobalVariableSet("EA_EquityPeak", equityPeak);
+      GlobalVariableSet(GetEquityPeakVarName(), equityPeak);
       currentDD = 0.0;
       currentRisk = RiskPercent_Normal;
       Print("[TrailingDD] NEW PEAK | Peak: ", equity, " | Risk: ", currentRisk, "%");
@@ -1979,11 +1985,12 @@ bool RecoverFromRestart()
    }
 
    // Recover equity peak
-   if (GlobalVariableCheck("EA_EquityPeak")) {
-      double recoveredPeak = GlobalVariableGet("EA_EquityPeak");
+   if (GlobalVariableCheck(GetEquityPeakVarName())) {
+      double recoveredPeak = GlobalVariableGet(GetEquityPeakVarName());
       double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
       Print("[RecoverFromRestart] --- Equity Peak Recovery ---");
+      Print("[RecoverFromRestart] Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
       Print("[RecoverFromRestart] Recovered Peak: ", DoubleToString(recoveredPeak, 2));
       Print("[RecoverFromRestart] Current Equity: ", DoubleToString(currentEquity, 2));
 
@@ -2006,7 +2013,8 @@ bool RecoverFromRestart()
    } else {
       Print("[RecoverFromRestart] No previous equity peak found, initializing fresh");
       equityPeak = AccountInfoDouble(ACCOUNT_EQUITY);
-      GlobalVariableSet("EA_EquityPeak", equityPeak);
+      GlobalVariableSet(GetEquityPeakVarName(), equityPeak);
+      Print("[RecoverFromRestart] Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
       Print("[RecoverFromRestart] Initial equity peak set to: ", DoubleToString(equityPeak, 2));
    }
 
