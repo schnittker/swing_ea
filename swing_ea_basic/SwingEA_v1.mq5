@@ -212,6 +212,28 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Log deinitialization reason
+   string reasonText = "";
+   switch(reason) {
+      case REASON_PROGRAM:     reasonText = "Expert removed from chart"; break;
+      case REASON_REMOVE:      reasonText = "Expert removed (ExpertRemove called)"; break;
+      case REASON_RECOMPILE:   reasonText = "Expert recompiled"; break;
+      case REASON_CHARTCHANGE: reasonText = "Chart symbol/period changed"; break;
+      case REASON_CHARTCLOSE:  reasonText = "Chart closed"; break;
+      case REASON_PARAMETERS:  reasonText = "Input parameters changed"; break;
+      case REASON_ACCOUNT:     reasonText = "Account changed"; break;
+      case REASON_TEMPLATE:    reasonText = "Template applied"; break;
+      case REASON_INITFAILED:  reasonText = "OnInit() failed"; break;
+      case REASON_CLOSE:       reasonText = "Terminal closing"; break;
+      default:                 reasonText = "Unknown reason (" + IntegerToString(reason) + ")"; break;
+   }
+
+   Print("========================================");
+   Print("SwingEA v1.0 deinitialized");
+   Print("Reason: ", reasonText);
+   Print("Reason Code: ", reason);
+   Print("========================================");
+
    // Release all EMA handles
    for (int i = 0; i < ArraySize(emaHandles); i++) {
       IndicatorRelease(emaHandles[i]);
@@ -223,7 +245,6 @@ void OnDeinit(const int reason)
    }
 
    EventKillTimer();
-   Print("SwingEA v1.0 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1479,8 +1500,16 @@ void UpdateTrailingDD()
    // Adjust risk based on drawdown level
    if (currentDD >= MaxDrawdownPercent) {
       // Emergency stop
+      Print("========================================");
+      Print("[TrailingDD] ⚠️ EMERGENCY STOP TRIGGERED!");
+      Print("[TrailingDD] Current Drawdown: ", DoubleToString(currentDD, 2), "%");
+      Print("[TrailingDD] Max Allowed DD: ", DoubleToString(MaxDrawdownPercent, 2), "%");
+      Print("[TrailingDD] Equity Peak: ", DoubleToString(equityPeak, 2));
+      Print("[TrailingDD] Current Equity: ", DoubleToString(equity, 2));
+      Print("[TrailingDD] Closing all positions and removing EA...");
+      Print("========================================");
+
       Comment("EMERGENCY STOP | Max Drawdown Reached: ", DoubleToString(currentDD, 2), "%");
-      Print("[TrailingDD] EMERGENCY STOP | DD: ", DoubleToString(currentDD, 2), "%");
 
       // Close all positions
       CloseAllPositions();
@@ -1496,8 +1525,10 @@ void UpdateTrailingDD()
       currentRisk = RiskPercent_Normal; // 1.0% bei DD 0-2%
    }
 
-   // Log DD update
-   Print("[TrailingDD] DD: ", DoubleToString(currentDD, 2), "% | Risk: ", currentRisk, "%");
+   // Log DD update with more details
+   Print("[TrailingDD] Equity Peak: ", DoubleToString(equityPeak, 2),
+         " | Current: ", DoubleToString(equity, 2),
+         " | DD: ", DoubleToString(currentDD, 2), "% | Risk: ", currentRisk, "%");
 }
 
 /**
@@ -1952,20 +1983,31 @@ bool RecoverFromRestart()
       double recoveredPeak = GlobalVariableGet("EA_EquityPeak");
       double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
+      Print("[RecoverFromRestart] --- Equity Peak Recovery ---");
+      Print("[RecoverFromRestart] Recovered Peak: ", DoubleToString(recoveredPeak, 2));
+      Print("[RecoverFromRestart] Current Equity: ", DoubleToString(currentEquity, 2));
+
       if (recoveredPeak > 0) {
          equityPeak = recoveredPeak;
-         Print("[RecoverFromRestart] Recovered equity peak: ", equityPeak);
 
          // Recalculate drawdown
          if (currentEquity < equityPeak) {
             currentDD = ((equityPeak - currentEquity) / equityPeak) * 100.0;
-            Print("[RecoverFromRestart] Recalculated DD: ", DoubleToString(currentDD, 2), "%");
+            Print("[RecoverFromRestart] ⚠️ Drawdown detected: ", DoubleToString(currentDD, 2), "%");
+
+            if (currentDD >= MaxDrawdownPercent) {
+               Print("[RecoverFromRestart] ⚠️ WARNING: DD >= MaxDD (", MaxDrawdownPercent, "%)!");
+               Print("[RecoverFromRestart] EA may trigger emergency stop!");
+            }
+         } else {
+            Print("[RecoverFromRestart] ✓ No drawdown - equity at or above peak");
          }
       }
    } else {
       Print("[RecoverFromRestart] No previous equity peak found, initializing fresh");
       equityPeak = AccountInfoDouble(ACCOUNT_EQUITY);
       GlobalVariableSet("EA_EquityPeak", equityPeak);
+      Print("[RecoverFromRestart] Initial equity peak set to: ", DoubleToString(equityPeak, 2));
    }
 
    Print("[RecoverFromRestart] ✓ Recovery complete");
