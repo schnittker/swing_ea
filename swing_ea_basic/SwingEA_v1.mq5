@@ -593,15 +593,15 @@ void CalculateFibLevels(int symbolIndex)
 }
 
 /**
- * IsPriceAtFibZone - Check if current price is within Fibonacci retracement zone (50%-61.8%)
+ * IsPriceAtFibZone - Check if current price is within Fibonacci retracement zone (38.2%-61.8%)
  * Based on specification Chapter 2.3 - Entry Zone
  *
  * For Long Setup:
- * - Entry zone: fib618 (lower) to fib500 (upper)
+ * - Entry zone: fib618 (lower) to fib382 (upper)
  * - Tolerance: ± Fib_Tolerance_ATR * ATR(14)
  *
  * For Short Setup:
- * - Entry zone: fib500 (upper) to fib618 (lower)
+ * - Entry zone: fib382 (lower) to fib618 (upper)
  * - Tolerance: ± Fib_Tolerance_ATR * ATR(14)
  *
  * @param symbolIndex - Index in symbolStates array
@@ -611,33 +611,33 @@ bool IsPriceAtFibZone(int symbolIndex)
 {
    string symbol = symbolStates[symbolIndex].symbol;
    double currentPrice = iClose(symbol, PERIOD_H4, 0);
-   double fib50 = symbolStates[symbolIndex].fib500;
+   double fib382 = symbolStates[symbolIndex].fib382;
    double fib618 = symbolStates[symbolIndex].fib618;
    double atr = GetATR(symbol, 0);
 
    // Check if we have valid Fib levels
-   if (fib50 <= 0 || fib618 <= 0 || atr <= 0) return false;
+   if (fib382 <= 0 || fib618 <= 0 || atr <= 0) return false;
 
    double tolerance = Fib_Tolerance_ATR * atr;
 
-   // For Long Setup: Price between fib618 (bottom) and fib50 (top) with tolerance
+   // For Long Setup: Price between fib618 (bottom) and fib382 (top) with tolerance
    if (symbolStates[symbolIndex].isLongSetup) {
-      bool inZone = (currentPrice >= fib618 - tolerance && currentPrice <= fib50 + tolerance);
+      bool inZone = (currentPrice >= fib618 - tolerance && currentPrice <= fib382 + tolerance);
 
       if (inZone) {
          Print("[", symbol, "] Price AT FIB ZONE (Long): ", currentPrice,
-               " (between ", fib618 - tolerance, " and ", fib50 + tolerance, ")");
+               " (between ", fib618 - tolerance, " and ", fib382 + tolerance, ")");
       }
 
       return inZone;
    }
-   // For Short Setup: Price between fib50 (bottom) and fib618 (top) with tolerance
+   // For Short Setup: Price between fib382 (bottom) and fib618 (top) with tolerance
    else {
-      bool inZone = (currentPrice <= fib618 + tolerance && currentPrice >= fib50 - tolerance);
+      bool inZone = (currentPrice <= fib618 + tolerance && currentPrice >= fib382 - tolerance);
 
       if (inZone) {
          Print("[", symbol, "] Price AT FIB ZONE (Short): ", currentPrice,
-               " (between ", fib50 - tolerance, " and ", fib618 + tolerance, ")");
+               " (between ", fib382 - tolerance, " and ", fib618 + tolerance, ")");
       }
 
       return inZone;
