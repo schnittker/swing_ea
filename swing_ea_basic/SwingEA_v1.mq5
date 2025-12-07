@@ -48,6 +48,10 @@ input bool Use1D_Filter = true;             // Use 1D Trend Filter
 // --- Timing ---
 input bool TradeOnlyInWindows = true;       // Trade only in 4 time windows - OPTIMIERT (besser für Qualität)
 
+// --- News Filter ---
+input bool UseSpreadFilter = true;          // Use Spread-Based News Filter (PROP FIRM SAFETY)
+input double SpreadMultiplierThreshold = 1.5; // Spread Threshold (× normal spread)
+
 // --- Logging ---
 input bool EnableFileLogging = false;       // Enable CSV Journal
 input bool ShowDashboard = true;            // Show Dashboard on Chart
@@ -395,147 +399,116 @@ int GetSymbolIndex(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Swing Detection Functions                                         |
+//| Swing Detection Functions – VERBESSERT                           |
 //+------------------------------------------------------------------+
 
-/**
- * IsSwingHigh - Detect if a candle at position bar is a Swing High
- * Based on specification Chapter 2.2 - Swing High (retrospektiv, 1 Candle Delay)
- *
- * Conditions:
- * - High[i] > High[i-1] && High[i] > High[i+1]
- * - High[i] >= High[i-2] && High[i] >= High[i+2]
- * - (High[i] - lastSwingHigh) > 0.5 * ATR(14)
- *
- * @param symbol - Symbol to check
- * @param bar - Bar index to check (0 = current)
- * @return true if swing high detected, false otherwise
- */
-bool IsSwingHigh(string symbol, int bar)
+// einfacher, robuster Swing-Filter (keine ATR-Abstandslogik mehr)
+bool IsSwingHigh(string symbol, int bar, int swingSize = 2)
 {
-   double high_i = iHigh(symbol, PERIOD_H4, bar);
-   double high_i1 = iHigh(symbol, PERIOD_H4, bar + 1);
-   double high_i2 = iHigh(symbol, PERIOD_H4, bar + 2);
-   double high_ip1 = iHigh(symbol, PERIOD_H4, bar - 1);
-   double high_ip2 = iHigh(symbol, PERIOD_H4, bar - 2);
+   // brauchen links und rechts genug Kerzen
+   if(bar < swingSize || bar + swingSize >= Bars(symbol, PERIOD_H4))
+      return false;
 
-   // Basic Structure: High[i] > High[i-1] && High[i] > High[i+1]
-   if (!(high_i > high_i1 && high_i > high_ip1)) return false;
+   double h = iHigh(symbol, PERIOD_H4, bar);
 
-   // Extended Structure: High[i] >= High[i-2] && High[i] >= High[i+2]
-   if (!(high_i >= high_i2 && high_i >= high_ip2)) return false;
-
-   // ATR-Filter: Minimum distance from last swing high
-   double atr = GetATR(symbol, bar);
-   if (atr <= 0) return false;
-
-   int symbolIndex = GetSymbolIndex(symbol);
-   if (symbolIndex < 0) return false;
-
-   double lastSwingHigh = symbolStates[symbolIndex].lastSwingHigh;
-
-   // Only apply ATR filter if we have a previous swing high
-   if (lastSwingHigh > 0) {
-      if ((high_i - lastSwingHigh) < MinSwingDistance_ATR * atr) {
-         return false;
-      }
+   for(int i = 1; i <= swingSize; i++)
+   {
+      if(h <= iHigh(symbol, PERIOD_H4, bar - i)) return false;
+      if(h <= iHigh(symbol, PERIOD_H4, bar + i)) return false;
    }
+   return true;
+}
 
+bool IsSwingLow(string symbol, int bar, int swingSize = 2)
+{
+   if(bar < swingSize || bar + swingSize >= Bars(symbol, PERIOD_H4))
+      return false;
+
+   double l = iLow(symbol, PERIOD_H4, bar);
+
+   for(int i = 1; i <= swingSize; i++)
+   {
+      if(l >= iLow(symbol, PERIOD_H4, bar - i)) return false;
+      if(l >= iLow(symbol, PERIOD_H4, bar + i)) return false;
+   }
    return true;
 }
 
 /**
- * IsSwingLow - Detect if a candle at position bar is a Swing Low
- * Inverse logic of IsSwingHigh
- *
- * Conditions:
- * - Low[i] < Low[i-1] && Low[i] < Low[i+1]
- * - Low[i] <= Low[i-2] && Low[i] <= Low[i+2]
- * - (lastSwingLow - Low[i]) > 0.5 * ATR(14)
- *
- * @param symbol - Symbol to check
- * @param bar - Bar index to check (0 = current)
- * @return true if swing low detected, false otherwise
- */
-bool IsSwingLow(string symbol, int bar)
-{
-   double low_i = iLow(symbol, PERIOD_H4, bar);
-   double low_i1 = iLow(symbol, PERIOD_H4, bar + 1);
-   double low_i2 = iLow(symbol, PERIOD_H4, bar + 2);
-   double low_ip1 = iLow(symbol, PERIOD_H4, bar - 1);
-   double low_ip2 = iLow(symbol, PERIOD_H4, bar - 2);
-
-   // Basic Structure: Low[i] < Low[i-1] && Low[i] < Low[i+1]
-   if (!(low_i < low_i1 && low_i < low_ip1)) return false;
-
-   // Extended Structure: Low[i] <= Low[i-2] && Low[i] <= Low[i+2]
-   if (!(low_i <= low_i2 && low_i <= low_ip2)) return false;
-
-   // ATR-Filter: Minimum distance from last swing low
-   double atr = GetATR(symbol, bar);
-   if (atr <= 0) return false;
-
-   int symbolIndex = GetSymbolIndex(symbol);
-   if (symbolIndex < 0) return false;
-
-   double lastSwingLow = symbolStates[symbolIndex].lastSwingLow;
-
-   // Only apply ATR filter if we have a previous swing low
-   if (lastSwingLow > 0) {
-      if ((lastSwingLow - low_i) < MinSwingDistance_ATR * atr) {
-         return false;
-      }
-   }
-
-   return true;
-}
-
-/**
- * UpdateSwings - Scan for new swings and update SymbolState
- * Checks last 100 bars for swing highs and lows
- *
- * @param symbol - Symbol to scan
+ * UpdateSwings - VERBESSERT
+ * - betrachtet nur die letzten 30 H4-Bars
+ * - nimmt jeweils den jüngsten gültigen Swing High / Low
+ * - KEINE Bedingung mehr "nur höheres Hoch / tieferes Tief"
+ *   -> deutlich mehr Setups, näher an deiner Diskretion
  */
 void UpdateSwings(string symbol)
 {
    int symbolIndex = GetSymbolIndex(symbol);
-   if (symbolIndex < 0) return;
+   if(symbolIndex < 0) return;
 
-   // Scan last 100 bars for new swings (start from bar 2 due to swing logic requiring bars before/after)
-   for (int i = 2; i <= 100; i++) {
-      // Check for Swing High
-      if (IsSwingHigh(symbol, i)) {
-         double newHigh = iHigh(symbol, PERIOD_H4, i);
+   int barsTotal = Bars(symbol, PERIOD_H4);
+   if(barsTotal < 10) return;
 
-         // Only update if higher than last swing high (new higher high)
-         if (newHigh > symbolStates[symbolIndex].lastSwingHigh) {
-            symbolStates[symbolIndex].lastSwingHigh = newHigh;
-            symbolStates[symbolIndex].swingHighBar = i;
-            Print("[", symbol, "] New Swing High detected at ", newHigh, " (bar ", i, ")");
-            break; // Only process the newest swing high
-         }
+   int maxLookback = 30;
+   int startBar = 2;
+   int endBar = MathMin(maxLookback, barsTotal - 3);
+
+   double lastHigh = 0.0;
+   int lastHighBar = 0;
+   double lastLow  = 0.0;
+   int lastLowBar  = 0;
+
+   // jüngste Swings finden (kleiner bar-index = näher an der Gegenwart)
+   for(int i = startBar; i <= endBar; i++)
+   {
+      if(IsSwingHigh(symbol, i))
+      {
+         lastHigh = iHigh(symbol, PERIOD_H4, i);
+         lastHighBar = i;
+         break; // den jüngsten Swing nehmen
       }
    }
 
-   // Scan last 100 bars for Swing Low (separate loop)
-   for (int i = 2; i <= 100; i++) {
-      // Check for Swing Low
-      if (IsSwingLow(symbol, i)) {
-         double newLow = iLow(symbol, PERIOD_H4, i);
-
-         // Only update if lower than last swing low (new lower low)
-         if (newLow < symbolStates[symbolIndex].lastSwingLow || symbolStates[symbolIndex].lastSwingLow == 0) {
-            symbolStates[symbolIndex].lastSwingLow = newLow;
-            symbolStates[symbolIndex].swingLowBar = i;
-            Print("[", symbol, "] New Swing Low detected at ", newLow, " (bar ", i, ")");
-            break; // Only process the newest swing low
-         }
+   for(int i = startBar; i <= endBar; i++)
+   {
+      if(IsSwingLow(symbol, i))
+      {
+         lastLow = iLow(symbol, PERIOD_H4, i);
+         lastLowBar = i;
+         break;
       }
    }
 
-   // Update lastUpdate timestamp
-   symbolStates[symbolIndex].lastUpdate = TimeCurrent();
+   bool changed = false;
+
+   if(lastHigh > 0.0 && lastHighBar > 0)
+   {
+      if(lastHigh != symbolStates[symbolIndex].lastSwingHigh
+         || lastHighBar != symbolStates[symbolIndex].swingHighBar)
+      {
+         symbolStates[symbolIndex].lastSwingHigh = lastHigh;
+         symbolStates[symbolIndex].swingHighBar  = lastHighBar;
+         Print("[", symbol, "] New Swing High: ", lastHigh, " (bar ", lastHighBar, ")");
+         changed = true;
+      }
+   }
+
+   if(lastLow > 0.0 && lastLowBar > 0)
+   {
+      if(lastLow != symbolStates[symbolIndex].lastSwingLow
+         || lastLowBar != symbolStates[symbolIndex].swingLowBar)
+      {
+         symbolStates[symbolIndex].lastSwingLow = lastLow;
+         symbolStates[symbolIndex].swingLowBar  = lastLowBar;
+         Print("[", symbol, "] New Swing Low: ", lastLow, " (bar ", lastLowBar, ")");
+         changed = true;
+      }
+   }
+
+   if(changed)
+      symbolStates[symbolIndex].lastUpdate = TimeCurrent();
 }
+
 
 //+------------------------------------------------------------------+
 //| Fibonacci Functions                                              |
@@ -1066,30 +1039,35 @@ void UpdateSymbolState(int symbolIndex)
 
    // State-Transition-Logik
    switch (currentState) {
-      case STATE_NO_TRADE: {
-         // Check if we have valid swings and can determine trend direction
-         UpdateSwings(symbol);
+      case STATE_NO_TRADE:
+         {
+            // NEU: Swings aktualisieren mit der neuen Logik
+            UpdateSwings(symbol);
 
-         if (!HasValidSwing(symbolIndex)) break;
+            if(!HasValidSwing(symbolIndex))
+               break;
 
-         // Try Long Setup
-         if (IsEMATrendValid(symbol, true)) {
-            symbolStates[symbolIndex].isLongSetup = true;
-            symbolStates[symbolIndex].state = STATE_TREND_FORMING;
-            Print("[", symbol, "] → STATE_TREND_FORMING (Long)");
+            // Try Long Setup
+            if(IsEMATrendValid(symbol, true))
+            {
+               symbolStates[symbolIndex].isLongSetup = true;
+               symbolStates[symbolIndex].state = STATE_TREND_FORMING;
+               Print("[", symbol, "] → STATE_TREND_FORMING (Long)");
+               break;
+            }
+
+            // Try Short Setup
+            if(IsEMATrendValid(symbol, false))
+            {
+               symbolStates[symbolIndex].isLongSetup = false;
+               symbolStates[symbolIndex].state = STATE_TREND_FORMING;
+               Print("[", symbol, "] → STATE_TREND_FORMING (Short)");
+               break;
+            }
+
             break;
          }
 
-         // Try Short Setup
-         if (IsEMATrendValid(symbol, false)) {
-            symbolStates[symbolIndex].isLongSetup = false;
-            symbolStates[symbolIndex].state = STATE_TREND_FORMING;
-            Print("[", symbol, "] → STATE_TREND_FORMING (Short)");
-            break;
-         }
-
-         break;
-      }
 
       case STATE_TREND_FORMING: {
          // Calculate Fibonacci levels once we're in trend forming state
@@ -1142,73 +1120,93 @@ void UpdateSymbolState(int symbolIndex)
    symbolStates[symbolIndex].lastUpdate = TimeCurrent();
 }
 
-/**
- * CheckForInvalidation - Check if current setup should be invalidated
- * Based on specification Chapter 3.2 - Swing Invalidation
- *
- * Setup is invalidated if:
- * - A new higher swing high is detected (for any setup)
- * - A new lower swing low is detected (for any setup)
- * - EMA trend reverses
- * - Price breaks below/above certain levels
- *
- * @param symbolIndex - Index in symbolStates array
- */
+//+------------------------------------------------------------------+
+//| CheckForInvalidation – VERBESSERT                                |
+//+------------------------------------------------------------------+
+
 void CheckForInvalidation(int symbolIndex)
 {
    string symbol = symbolStates[symbolIndex].symbol;
    TradingState currentState = symbolStates[symbolIndex].state;
 
-   // Only check invalidation if not in TRADE_TAKEN state
-   // (open positions should not be invalidated by new swings)
-   if (currentState == STATE_TRADE_TAKEN) return;
+   // Wenn Trade läuft, nichts invalidieren
+   if(currentState == STATE_TRADE_TAKEN)
+      return;
 
-   // Save current swing levels
-   double prevSwingHigh = symbolStates[symbolIndex].lastSwingHigh;
-   double prevSwingLow = symbolStates[symbolIndex].lastSwingLow;
+   // alte Swings merken
+   double prevHigh = symbolStates[symbolIndex].lastSwingHigh;
+   double prevLow  = symbolStates[symbolIndex].lastSwingLow;
 
-   // Check for new swings
+   // Swings updaten (mit der neuen, lockereren Logik)
    UpdateSwings(symbol);
 
-   // Check if swing levels changed
-   bool swingHighChanged = (symbolStates[symbolIndex].lastSwingHigh != prevSwingHigh);
-   bool swingLowChanged = (symbolStates[symbolIndex].lastSwingLow != prevSwingLow);
+   double newHigh = symbolStates[symbolIndex].lastSwingHigh;
+   double newLow  = symbolStates[symbolIndex].lastSwingLow;
 
-   if (swingHighChanged || swingLowChanged) {
-      Print("[", symbol, "] Setup invalidated - New swing detected");
-      Print("  Previous High: ", prevSwingHigh, " → New High: ", symbolStates[symbolIndex].lastSwingHigh);
-      Print("  Previous Low: ", prevSwingLow, " → New Low: ", symbolStates[symbolIndex].lastSwingLow);
+   bool swingChanged = (prevHigh != newHigh || prevLow != newLow);
 
-      // Reset state to NO_TRADE
-      symbolStates[symbolIndex].state = STATE_NO_TRADE;
-      symbolStates[symbolIndex].fib382 = 0.0;
-      symbolStates[symbolIndex].fib500 = 0.0;
-      symbolStates[symbolIndex].fib618 = 0.0;
-      symbolStates[symbolIndex].qualityScore = 0.0;
-      symbolStates[symbolIndex].isLongSetup = false;
+   // EMA-Trend checken
+   bool isLong = symbolStates[symbolIndex].isLongSetup;
 
-      return;
-   }
-
-   // Check if EMA trend is still valid for current setup
-   if (currentState != STATE_NO_TRADE && currentState != STATE_TRADE_TAKEN) {
-      bool isLong = symbolStates[symbolIndex].isLongSetup;
-
-      if (!IsEMATrendValid(symbol, isLong)) {
+   // EMA-Trend ist der wichtigste Invalidation-Trigger
+   if(currentState != STATE_NO_TRADE && currentState != STATE_TRADE_TAKEN)
+   {
+      if(!IsEMATrendValid(symbol, isLong))
+      {
          Print("[", symbol, "] Setup invalidated - EMA trend no longer valid");
-
-         // Reset state to NO_TRADE
          symbolStates[symbolIndex].state = STATE_NO_TRADE;
          symbolStates[symbolIndex].fib382 = 0.0;
          symbolStates[symbolIndex].fib500 = 0.0;
          symbolStates[symbolIndex].fib618 = 0.0;
          symbolStates[symbolIndex].qualityScore = 0.0;
          symbolStates[symbolIndex].isLongSetup = false;
-
          return;
       }
    }
+
+   // Swings ändern sich permanent – wir invalidieren NICHT mehr sofort bei jedem neuen Swing.
+   // Optional: Nur invalidieren, wenn Swing klar GEGEN das Setup geht.
+   if(swingChanged && currentState >= STATE_TREND_FORMING && currentState <= STATE_AT_FIB)
+   {
+      double price = iClose(symbol, PERIOD_H4, 0);
+
+      if(isLong)
+      {
+         // Long-Setup: wenn neuer Low-Swing klar unter altem Low liegt und Preis darunter,
+         // kann Setup als zerstört gelten
+         if(prevLow > 0 && newLow < prevLow && price < prevLow)
+         {
+            Print("[", symbol, "] Setup invalidated - new lower low against long setup");
+            symbolStates[symbolIndex].state = STATE_NO_TRADE;
+            symbolStates[symbolIndex].fib382 = 0.0;
+            symbolStates[symbolIndex].fib500 = 0.0;
+            symbolStates[symbolIndex].fib618 = 0.0;
+            symbolStates[symbolIndex].qualityScore = 0.0;
+            symbolStates[symbolIndex].isLongSetup = false;
+            return;
+         }
+      }
+      else
+      {
+         // Short-Setup: wenn neuer High-Swing klar über altem High liegt und Preis darüber
+         if(prevHigh > 0 && newHigh > prevHigh && price > prevHigh)
+         {
+            Print("[", symbol, "] Setup invalidated - new higher high against short setup");
+            symbolStates[symbolIndex].state = STATE_NO_TRADE;
+            symbolStates[symbolIndex].fib382 = 0.0;
+            symbolStates[symbolIndex].fib500 = 0.0;
+            symbolStates[symbolIndex].fib618 = 0.0;
+            symbolStates[symbolIndex].qualityScore = 0.0;
+            symbolStates[symbolIndex].isLongSetup = false;
+            return;
+         }
+      }
+   }
+
+   // wenn nichts davon greift → Setup bleibt bestehen
+   symbolStates[symbolIndex].lastUpdate = TimeCurrent();
 }
+
 
 //+------------------------------------------------------------------+
 //| Quality Scoring Functions                                        |
@@ -1692,6 +1690,73 @@ bool CanOpenNewPosition()
    return canOpen;
 }
 
+//+------------------------------------------------------------------+
+//| News Filter via Spread Detection                                 |
+//+------------------------------------------------------------------+
+
+/**
+ * IsSpreadNormal - Check if spread is within normal range
+ *
+ * Purpose: Detect high-impact news events by monitoring spread widening
+ * Many prop firms ban trading during news, and spreads widen significantly
+ * during high-impact events (NFP, CPI, FOMC, etc.)
+ *
+ * Logic:
+ * - Get current spread (Ask - Bid)
+ * - Get normal spread from symbol specification
+ * - Compare ratio: if current spread > 1.5x normal → likely news event
+ *
+ * @param symbol - Symbol to check
+ * @return true if spread is normal, false if abnormally wide (news suspected)
+ */
+bool IsSpreadNormal(string symbol)
+{
+   // If spread filter is disabled, always return true (allow trade)
+   if (!UseSpreadFilter) {
+      return true;
+   }
+
+   // Get current Ask and Bid
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+
+   // Validate prices
+   if (ask <= 0 || bid <= 0 || point <= 0) {
+      Print("[SpreadFilter] Invalid prices for ", symbol, " - skipping spread check");
+      return true; // Don't block trade due to data error
+   }
+
+   // Get normal spread (average spread from symbol specification)
+   int normalSpread = (int)SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+   if (normalSpread <= 0) {
+      Print("[SpreadFilter] Invalid normal spread for ", symbol, " - skipping spread check");
+      return true; // Don't block trade due to data error
+   }
+
+   // Calculate current spread in points
+   double currentSpread = (ask - bid) / point;
+
+   // Calculate spread ratio
+   double spreadRatio = currentSpread / (double)normalSpread;
+
+   // Check against threshold (default 1.5x, adjustable via input)
+   // Conservative threshold to avoid false positives
+   // During major news (NFP, FOMC), spreads can widen 3-10x
+   if (spreadRatio > SpreadMultiplierThreshold) {
+      Print("⚠️ [SpreadFilter] ", symbol, " - ABNORMAL SPREAD DETECTED!");
+      Print("   Current Spread: ", currentSpread, " points");
+      Print("   Normal Spread: ", normalSpread, " points");
+      Print("   Ratio: ", DoubleToString(spreadRatio, 2), "x normal");
+      Print("   Threshold: ", SpreadMultiplierThreshold, "x");
+      Print("   → Trade BLOCKED (likely news event)");
+      return false;
+   }
+
+   // Spread is normal
+   return true;
+}
+
 /**
  * OpenTrade - Open a new trade for a symbol setup
  * Based on specification Chapter 5.3 - Order Execution
@@ -1713,6 +1778,13 @@ bool OpenTrade(int symbolIndex)
 
    // Check if we can open
    if (!CanOpenNewPosition()) {
+      return false;
+   }
+
+   // ⚠️ SPREAD FILTER: Block trade if spread is abnormally wide (likely news event)
+   // Prop firms often ban trading during high-impact news
+   if (!IsSpreadNormal(symbol)) {
+      Print("[OpenTrade] Trade BLOCKED for ", symbol, " - Abnormal spread detected (likely news)");
       return false;
    }
 
@@ -1805,32 +1877,34 @@ bool OpenTrade(int symbolIndex)
  */
 bool IsInTradingWindow()
 {
-   if (!TradeOnlyInWindows) return true; // Bypass if disabled
+   if(!TradeOnlyInWindows)
+      return true; // alles erlaubt
 
    datetime serverTime = TimeCurrent();
    MqlDateTime dt;
    TimeToStruct(serverTime, dt);
-   int hour = dt.hour;
+   int hour   = dt.hour;
    int minute = dt.min;
 
    // Window 1: 06:45 - 07:00
-   if (hour == 6 && minute >= 45) return true;
-   if (hour == 7 && minute == 0) return true;
+   if(hour == 6 && minute >= 45) return true;
+   if(hour == 7 && minute == 0)  return true;
 
    // Window 2: 10:45 - 11:00
-   if (hour == 10 && minute >= 45) return true;
-   if (hour == 11 && minute == 0) return true;
+   if(hour == 10 && minute >= 45) return true;
+   if(hour == 11 && minute == 0)  return true;
 
    // Window 3: 14:45 - 15:00
-   if (hour == 14 && minute >= 45) return true;
-   if (hour == 15 && minute == 0) return true;
+   if(hour == 14 && minute >= 45) return true;
+   if(hour == 15 && minute == 0)  return true;
 
    // Window 4: 18:45 - 19:00
-   if (hour == 18 && minute >= 45) return true;
-   if (hour == 19 && minute == 0) return true;
+   if(hour == 18 && minute >= 45) return true;
+   if(hour == 19 && minute == 0)  return true;
 
    return false;
 }
+
 
 //+------------------------------------------------------------------+
 //| Error Handling & Validation Functions                            |
