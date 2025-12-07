@@ -4,7 +4,7 @@
 
 Automatisierter Multi-Symbol Swing Trading EA für MetaTrader 5, optimiert für 25 Forex-Paare + Gold (XAUUSD) auf dem H4-Timeframe.
 
-## Aktuelle Version: 1.0 (Simplified ATR-Based SL/TP)
+## Aktuelle Version: 1.1 (EMA Tolerance Features)
 
 ### Kernfeatures
 
@@ -22,9 +22,11 @@ Automatisierter Multi-Symbol Swing Trading EA für MetaTrader 5, optimiert für 
 ### Entry-Logik
 
 1. **EMA200 Trend-Filter:**
-   - Long: Preis über EMA200, EMA steigend
-   - Short: Preis unter EMA200, EMA fallend
+   - Long: Preis über EMA200, EMA steigend (mit Toleranz)
+   - Short: Preis unter EMA200, EMA fallend (mit Toleranz)
    - Mindestabstand: 0.7 × ATR (optimiert)
+   - **EMA-Steigung Toleranz:** 0.1 × ATR (erlaubt leicht flache EMAs)
+   - **Invalidierungs-Toleranz:** 0.3 × ATR (Setup bleibt bei leichter Umkehr bestehen)
 
 2. **Swing-Detection:**
    - Higher Highs / Lower Lows Erkennung
@@ -66,6 +68,45 @@ TP = ATR(14) × 2.0
 - **Kein Break-Even Shift** - SL bleibt konstant
 - **Keine Trailing-Stops** - Festes TP-Ziel
 
+### EMA-Toleranz System (NEU in v1.1)
+
+Das System verwendet **zwei verschiedene Toleranzen** für EMA-Steigung:
+
+#### 1. Entry-Toleranz (`EMA_Slope_Tolerance_ATR = 0.1`)
+**Wann:** Bei der Erkennung neuer Setups (STATE_NO_TRADE → STATE_TREND_FORMING)
+
+**Funktion:**
+- Erlaubt leicht flache EMAs
+- Long-Setup: EMA gilt als "steigend" wenn `ema0 >= ema5 - 0.1×ATR`
+- Short-Setup: EMA gilt als "fallend" wenn `ema0 <= ema5 + 0.1×ATR`
+
+**Beispiel bei EURUSD (ATR = 100 Pips):**
+- Toleranz = 10 Pips
+- EMA darf bis zu 10 Pips fallen und gilt trotzdem als "steigend" für Long-Setup
+
+#### 2. Invalidierungs-Toleranz (`EMA_Invalidation_Tolerance_ATR = 0.3`)
+**Wann:** Bei laufenden Setups (STATE_TREND_FORMING, STATE_RETRACEMENT, STATE_AT_FIB)
+
+**Funktion:**
+- 3× größer als Entry-Toleranz
+- Setup wird nur bei **STARKER** EMA-Umkehr invalidiert
+- Long-Setup: Invalidierung nur wenn `ema0 < ema5 - 0.3×ATR`
+- Short-Setup: Invalidierung nur wenn `ema0 > ema5 + 0.3×ATR`
+
+**Beispiel bei EURUSD (ATR = 100 Pips):**
+- Toleranz = 30 Pips
+- Setup bleibt bestehen bis EMA sich 30 Pips in Gegenrichtung bewegt
+
+**Warum zwei Toleranzen?**
+- **Entry:** Striktere Bedingung für neue Setups (Qualität)
+- **Invalidierung:** Lockerere Bedingung für bestehende Setups (Persistenz)
+- **Gap:** 40 Pips Spielraum (10 + 30) in dem Setups trotz EMA-Abflachung bestehen bleiben
+
+**Effekt:**
+- ✅ Mehr Setups in seitwärts/flachen Märkten
+- ✅ Setups bleiben länger bestehen
+- ✅ Mehr Trades über das ganze Jahr (nicht nur im Januar)
+
 ---
 
 ## Parameter
@@ -84,7 +125,9 @@ input int EMA_Period = 200;                 // EMA Periode
 input int ATR_Period = 14;                  // ATR Periode
 input double ATR_SL_Multiplier = 1.0;       // SL = ATR × 1.0
 input double ATR_TP_Multiplier = 2.0;       // TP = ATR × 2.0
-input double MinEMADistance_ATR = 0.7;      // Min EMA-Abstand
+input double MinEMADistance_ATR = 0.7;      // Min EMA-Abstand (Preis zu EMA)
+input double EMA_Slope_Tolerance_ATR = 0.1; // EMA-Steigung Toleranz (Entry)
+input double EMA_Invalidation_Tolerance_ATR = 0.3; // EMA-Steigung Toleranz (Invalidierung)
 ```
 
 ### Fibonacci-Levels
@@ -254,6 +297,19 @@ Wenn du FXBlue verwendest:
 
 ## Änderungshistorie
 
+### v1.1 (2025-12-07)
+- ✅ **EMA Tolerance Features** - Behebt "Nur-Januar-Trades" Problem
+  - **Neuer Parameter:** `EMA_Slope_Tolerance_ATR = 0.1`
+    - Erlaubt leicht flache EMAs beim Setup-Entry
+    - Long: EMA muss nur `>= ema5 - 0.1×ATR` sein (statt strikt `> ema5`)
+    - Short: EMA muss nur `<= ema5 + 0.1×ATR` sein (statt strikt `< ema5`)
+  - **Neuer Parameter:** `EMA_Invalidation_Tolerance_ATR = 0.3`
+    - Weniger aggressive Invalidierung bestehender Setups
+    - 3× toleranter als Entry-Bedingung
+    - Setup wird nur bei STARKER EMA-Umkehr invalidiert
+  - **Effekt:** Deutlich mehr Setups über das ganze Jahr, nicht nur im Januar
+  - **Problem gelöst:** In seitwärts/flachen Märkten wurden Setups zu früh invalidiert
+
 ### v1.0 (2025-01-29)
 - ✅ Simplified ATR-based SL/TP
   - SL = ATR × 1.0 (vorher: 1.5)
@@ -335,6 +391,6 @@ Für persönlichen Gebrauch. Keine Weitergabe ohne Erlaubnis.
 
 ---
 
-**Version:** 1.0
-**Letztes Update:** 2025-01-29
+**Version:** 1.1
+**Letztes Update:** 2025-12-07
 **Status:** ✅ Production Ready (nach Demo-Test)

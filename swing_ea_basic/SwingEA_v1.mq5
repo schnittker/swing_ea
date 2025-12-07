@@ -26,6 +26,8 @@ input int ATR_Period = 14;                  // ATR Period
 input double ATR_SL_Multiplier = 1.0;       // ATR SL Multiplier
 input double ATR_TP_Multiplier = 2.0;       // ATR TP Multiplier
 input double MinEMADistance_ATR = 0.7;      // Min EMA Distance (× ATR) - OPTIMIERT
+input double EMA_Slope_Tolerance_ATR = 0.1; // EMA Slope Tolerance (× ATR) - Erlaubt flache EMAs
+input double EMA_Invalidation_Tolerance_ATR = 0.3; // EMA Invalidation Tolerance (× ATR) - Nur bei starker Umkehr invalidieren
 
 // --- Fibonacci Levels ---
 input double Fib_Level1 = 38.2;             // Fib Level 1 (%)
@@ -627,13 +629,15 @@ bool IsPriceAtFibZone(int symbolIndex)
  *
  * Long Setup Requirements:
  * - Price > EMA200 (current)
- * - EMA200 rising (EMA200[0] > EMA200[5])
+ * - EMA200 rising (EMA200[0] >= EMA200[5] - tolerance) - allows slightly flat EMAs
  * - Price distance from EMA200 >= MinEMADistance_ATR * ATR(14)
  *
  * Short Setup Requirements:
  * - Price < EMA200 (current)
- * - EMA200 falling (EMA200[0] < EMA200[5])
+ * - EMA200 falling (EMA200[0] <= EMA200[5] + tolerance) - allows slightly flat EMAs
  * - Price distance from EMA200 >= MinEMADistance_ATR * ATR(14)
+ *
+ * Tolerance = EMA_Slope_Tolerance_ATR * ATR(14)
  *
  * @param symbol - Symbol to check
  * @param isLong - true for long setup, false for short
@@ -658,13 +662,17 @@ bool IsEMATrendValid(string symbol, bool isLong)
       return false;
    }
 
-   // Long Setup: Price above EMA and EMA rising
+   // Calculate EMA slope tolerance (allows slightly flat EMAs)
+   double emaSlopeTolerance = EMA_Slope_Tolerance_ATR * atr;
+
+   // Long Setup: Price above EMA and EMA rising (with tolerance)
    if (isLong) {
       bool priceAboveEMA = (price > ema0);
-      bool emaRising = (ema0 > ema5);
+      bool emaRising = (ema0 >= ema5 - emaSlopeTolerance);
 
       if (priceAboveEMA && emaRising) {
-         Print("[", symbol, "] LONG TREND VALID - Price: ", price, " above EMA: ", ema0, ", EMA rising");
+         Print("[", symbol, "] LONG TREND VALID - Price: ", price, " above EMA: ", ema0,
+               ", EMA rising/flat (tolerance: ", emaSlopeTolerance, ")");
          return true;
       }
 
@@ -672,18 +680,19 @@ bool IsEMATrendValid(string symbol, bool isLong)
          Print("[", symbol, "] LONG INVALID - Price below EMA (", price, " < ", ema0, ")");
       }
       if (!emaRising) {
-         Print("[", symbol, "] LONG INVALID - EMA falling/flat (", ema0, " <= ", ema5, ")");
+         Print("[", symbol, "] LONG INVALID - EMA falling (", ema0, " < ", ema5 - emaSlopeTolerance, ")");
       }
 
       return false;
    }
-   // Short Setup: Price below EMA and EMA falling
+   // Short Setup: Price below EMA and EMA falling (with tolerance)
    else {
       bool priceBelowEMA = (price < ema0);
-      bool emaFalling = (ema0 < ema5);
+      bool emaFalling = (ema0 <= ema5 + emaSlopeTolerance);
 
       if (priceBelowEMA && emaFalling) {
-         Print("[", symbol, "] SHORT TREND VALID - Price: ", price, " below EMA: ", ema0, ", EMA falling");
+         Print("[", symbol, "] SHORT TREND VALID - Price: ", price, " below EMA: ", ema0,
+               ", EMA falling/flat (tolerance: ", emaSlopeTolerance, ")");
          return true;
       }
 
@@ -691,7 +700,7 @@ bool IsEMATrendValid(string symbol, bool isLong)
          Print("[", symbol, "] SHORT INVALID - Price above EMA (", price, " > ", ema0, ")");
       }
       if (!emaFalling) {
-         Print("[", symbol, "] SHORT INVALID - EMA rising/flat (", ema0, " >= ", ema5, ")");
+         Print("[", symbol, "] SHORT INVALID - EMA rising (", ema0, " > ", ema5 + emaSlopeTolerance, ")");
       }
 
       return false;
@@ -1121,9 +1130,26 @@ void UpdateSymbolState(int symbolIndex)
 }
 
 //+------------------------------------------------------------------+
-//| CheckForInvalidation – VERBESSERT                                |
+//| CheckForInvalidation - Check if setup should be invalidated      |
 //+------------------------------------------------------------------+
-
+/**
+ * CheckForInvalidation - Monitor active setups and invalidate if conditions change
+ *
+ * Invalidation Triggers:
+ * 1. EMA Trend Reversal (with tolerance):
+ *    - Long Setup: Invalidate if EMA falls strongly (ema0 < ema5 - invalidationTolerance)
+ *    - Short Setup: Invalidate if EMA rises strongly (ema0 > ema5 + invalidationTolerance)
+ *    - Uses EMA_Invalidation_Tolerance_ATR (default 0.3) - larger than entry tolerance
+ *    - This prevents premature invalidation during flat/sideways markets
+ *
+ * 2. Swing Structure Change (against setup):
+ *    - Long Setup: Invalidate if new lower low appears and price breaks below it
+ *    - Short Setup: Invalidate if new higher high appears and price breaks above it
+ *
+ * Note: Active trades (STATE_TRADE_TAKEN) are never invalidated
+ *
+ * @param symbolIndex - Index in symbolStates array
+ */
 void CheckForInvalidation(int symbolIndex)
 {
    string symbol = symbolStates[symbolIndex].symbol;
@@ -1145,22 +1171,53 @@ void CheckForInvalidation(int symbolIndex)
 
    bool swingChanged = (prevHigh != newHigh || prevLow != newLow);
 
-   // EMA-Trend checken
+   // EMA-Trend checken mit größerer Toleranz (weniger aggressiv)
    bool isLong = symbolStates[symbolIndex].isLongSetup;
 
    // EMA-Trend ist der wichtigste Invalidation-Trigger
+   // ABER: Nutze größere Toleranz als bei Entry - invalidiere nur bei STARKER Umkehr
    if(currentState != STATE_NO_TRADE && currentState != STATE_TRADE_TAKEN)
    {
-      if(!IsEMATrendValid(symbol, isLong))
+      double ema0 = GetEMA(symbol, 0);
+      double ema5 = GetEMA(symbol, 5);
+      double atr = GetATR(symbol, 0);
+
+      if(ema0 > 0 && ema5 > 0 && atr > 0)
       {
-         Print("[", symbol, "] Setup invalidated - EMA trend no longer valid");
-         symbolStates[symbolIndex].state = STATE_NO_TRADE;
-         symbolStates[symbolIndex].fib382 = 0.0;
-         symbolStates[symbolIndex].fib500 = 0.0;
-         symbolStates[symbolIndex].fib618 = 0.0;
-         symbolStates[symbolIndex].qualityScore = 0.0;
-         symbolStates[symbolIndex].isLongSetup = false;
-         return;
+         double invalidationTolerance = EMA_Invalidation_Tolerance_ATR * atr;
+         bool strongReversal = false;
+
+         if(isLong)
+         {
+            // Long Setup: Nur invalidieren wenn EMA STARK fällt (über Toleranz hinaus)
+            if(ema0 < ema5 - invalidationTolerance)
+            {
+               strongReversal = true;
+               Print("[", symbol, "] Setup invalidated - EMA strong downtrend (",
+                     DoubleToString(ema0, 5), " < ", DoubleToString(ema5 - invalidationTolerance, 5), ")");
+            }
+         }
+         else
+         {
+            // Short Setup: Nur invalidieren wenn EMA STARK steigt (über Toleranz hinaus)
+            if(ema0 > ema5 + invalidationTolerance)
+            {
+               strongReversal = true;
+               Print("[", symbol, "] Setup invalidated - EMA strong uptrend (",
+                     DoubleToString(ema0, 5), " > ", DoubleToString(ema5 + invalidationTolerance, 5), ")");
+            }
+         }
+
+         if(strongReversal)
+         {
+            symbolStates[symbolIndex].state = STATE_NO_TRADE;
+            symbolStates[symbolIndex].fib382 = 0.0;
+            symbolStates[symbolIndex].fib500 = 0.0;
+            symbolStates[symbolIndex].fib618 = 0.0;
+            symbolStates[symbolIndex].qualityScore = 0.0;
+            symbolStates[symbolIndex].isLongSetup = false;
+            return;
+         }
       }
    }
 
