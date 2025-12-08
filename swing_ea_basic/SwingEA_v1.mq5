@@ -277,6 +277,9 @@ void OnTimer()
    // Step 2: Update Trailing Drawdown
    UpdateTrailingDD();
 
+   // NEU: States mit offenen Positionen synchronisieren
+   SyncStatesWithPositions();
+
    // Step 3: Scan all symbols and update states
    for (int i = 0; i < ArraySize(symbolStates); i++) {
       UpdateSymbolState(i);
@@ -1746,6 +1749,48 @@ bool CanOpenNewPosition()
 
    return canOpen;
 }
+
+// Prüft, ob für ein Symbol aktuell eine offene Position dieses EAs existiert
+bool HasOpenPositionForSymbol(string symbol)
+{
+   for (int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket == 0) 
+         continue;
+
+      if (PositionGetString(POSITION_COMMENT) == "SwingEA_v1" &&
+          PositionGetString(POSITION_SYMBOL)  == symbol)
+      {
+         return true;
+      }
+   }
+   return false;
+}
+
+// Synchronisiert StateMachine mit den echten offenen Positionen
+void SyncStatesWithPositions()
+{
+   for (int i = 0; i < ArraySize(symbolStates); i++)
+   {
+      string symbol = symbolStates[i].symbol;
+      bool hasPosition = HasOpenPositionForSymbol(symbol);
+
+      // Wenn kein Trade mehr offen, aber State noch TRADE_TAKEN -> zurücksetzen
+      if (!hasPosition && symbolStates[i].state == STATE_TRADE_TAKEN)
+      {
+         symbolStates[i].state        = STATE_NO_TRADE;
+         symbolStates[i].fib382       = 0.0;
+         symbolStates[i].fib500       = 0.0;
+         symbolStates[i].fib618       = 0.0;
+         symbolStates[i].qualityScore = 0.0;
+         symbolStates[i].isLongSetup  = false;
+
+         Print("[SyncStates] ", symbol, ": position closed -> state reset to STATE_NO_TRADE");
+      }
+   }
+}
+
 
 //+------------------------------------------------------------------+
 //| News Filter via Spread Detection                                 |
