@@ -79,62 +79,65 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
                         const MqlTradeRequest &r,
                         const MqlTradeResult &res)
 {
-   if(t.magic != MasterMagic && r.magic != MasterMagic) return;
-
-   // SL / TP change
+   // --- SL / TP modification ---
    if(r.action == TRADE_ACTION_SLTP && res.retcode == TRADE_RETCODE_DONE)
    {
+      if(r.magic != MasterMagic) return;
+
       g_seq++;
-      Emit(StringFormat(
-         "%d;MODIFY;%d;%s;0;0;%.5f;%.5f;%d;%d",
-         g_seq,
-         r.position,
-         r.symbol,
-         r.sl,
-         r.tp,
-         MasterMagic,
-         TimeCurrent()
-      ));
+      Emit(
+         (string)g_seq + ";MODIFY;" +
+         (string)r.position + ";" +
+         r.symbol + ";0;0;" +
+         DoubleToString(r.sl, _Digits) + ";" +
+         DoubleToString(r.tp, _Digits) + ";" +
+         (string)MasterMagic + ";" +
+         (string)TimeCurrent()
+      );
       SaveSeq(g_seq);
       return;
    }
 
+   // --- Deal events (OPEN / CLOSE) ---
    if(t.type != TRADE_TRANSACTION_DEAL_ADD) return;
    if(!HistoryDealSelect(t.deal)) return;
 
-   long entry = HistoryDealGetInteger(t.deal, DEAL_ENTRY);
-   long type  = HistoryDealGetInteger(t.deal, DEAL_TYPE);
-   long posid = HistoryDealGetInteger(t.deal, DEAL_POSITION_ID);
+   long dealMagic = (long)HistoryDealGetInteger(t.deal, DEAL_MAGIC);
+   if(dealMagic != MasterMagic) return;
+
+   long entry = (long)HistoryDealGetInteger(t.deal, DEAL_ENTRY);
+   long dtype = (long)HistoryDealGetInteger(t.deal, DEAL_TYPE);
+   long posid = (long)HistoryDealGetInteger(t.deal, DEAL_POSITION_ID);
    string sym = HistoryDealGetString(t.deal, DEAL_SYMBOL);
 
-   // OPEN
    if(entry == DEAL_ENTRY_IN)
    {
       g_seq++;
-      Emit(StringFormat(
-         "%d;OPEN;%d;%s;%s;0;0;0;%d;%d",
-         g_seq,
-         posid,
-         sym,
-         type==DEAL_TYPE_BUY?"BUY":"SELL",
-         MasterMagic,
-         TimeCurrent()
-      ));
+      Emit(
+         (string)g_seq + ";OPEN;" +
+         (string)posid + ";" +
+         sym + ";" +
+         (dtype==DEAL_TYPE_BUY ? "BUY" : "SELL") +
+         ";0;0;0;" +
+         (string)MasterMagic + ";" +
+         (string)TimeCurrent()
+      );
       SaveSeq(g_seq);
+      return;
    }
 
-   // CLOSE
    if(entry == DEAL_ENTRY_OUT)
    {
       g_seq++;
-      Emit(StringFormat(
-         "%d;CLOSE;%d;%s;0;0;0;0;%d;%d",
-         g_seq,
-         posid,
-         sym,
-         MasterMagic,
-         TimeCurrent()
-      ));
+      Emit(
+         (string)g_seq + ";CLOSE;" +
+         (string)posid + ";" +
+         sym + ";0;0;0;0;" +
+         (string)MasterMagic + ";" +
+         (string)TimeCurrent()
+      );
       SaveSeq(g_seq);
+      return;
    }
 }
+
