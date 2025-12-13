@@ -1,19 +1,20 @@
 #property strict
 input long MasterMagic = 10001;
 
-string EVENTS_FILE = "copier_events.csv";
-string LOCK_FILE   = "copier.lock";
-string SEQ_FILE    = "copier_seq.txt";
+// Files are stored in D:/Documents/mt5/ (two levels up from MQL5/Files)
+string EVENTS_FILE = "../../copier_events.csv";
+string LOCK_FILE   = "../../copier.lock";
+string SEQ_FILE    = "../../copier_seq.txt";
 
 long g_seq = 0;
 
 // ---------- LOCK ----------
 bool Lock()
 {
-   while(FileIsExist(LOCK_FILE, FILE_COMMON))
+   while(FileIsExist(LOCK_FILE))
       Sleep(5);
 
-   int h = FileOpen(LOCK_FILE, FILE_WRITE|FILE_TXT|FILE_COMMON);
+   int h = FileOpen(LOCK_FILE, FILE_WRITE|FILE_TXT);
    if(h == INVALID_HANDLE) return false;
    FileClose(h);
    return true;
@@ -21,13 +22,13 @@ bool Lock()
 
 void Unlock()
 {
-   FileDelete(LOCK_FILE, FILE_COMMON);
+   FileDelete(LOCK_FILE);
 }
 
 // ---------- SEQ ----------
 long LoadSeq()
 {
-   int h = FileOpen(SEQ_FILE, FILE_READ|FILE_TXT|FILE_COMMON);
+   int h = FileOpen(SEQ_FILE, FILE_READ|FILE_TXT);
    if(h == INVALID_HANDLE) return 0;
    long s = (long)StringToInteger(FileReadString(h));
    FileClose(h);
@@ -36,7 +37,7 @@ long LoadSeq()
 
 void SaveSeq(long s)
 {
-   int h = FileOpen(SEQ_FILE, FILE_WRITE|FILE_TXT|FILE_COMMON);
+   int h = FileOpen(SEQ_FILE, FILE_WRITE|FILE_TXT);
    if(h == INVALID_HANDLE) return;
    FileWrite(h, (string)s);
    FileClose(h);
@@ -48,7 +49,7 @@ void Emit(string line)
    if(!Lock()) return;
 
    int h = FileOpen(EVENTS_FILE,
-      FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_SHARE_READ);
+      FILE_READ|FILE_WRITE|FILE_TXT|FILE_SHARE_READ);
 
    if(h == INVALID_HANDLE)
    {
@@ -112,13 +113,24 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
 
    if(entry == DEAL_ENTRY_IN)
    {
+      // Get SL/TP and LOT from the opened position
+      double sl = 0, tp = 0, lot = 0;
+      if(PositionSelectByTicket(posid))
+      {
+         sl = PositionGetDouble(POSITION_SL);
+         tp = PositionGetDouble(POSITION_TP);
+         lot = PositionGetDouble(POSITION_VOLUME);
+      }
+
       g_seq++;
       Emit(
          (string)g_seq + ";OPEN;" +
          (string)posid + ";" +
          sym + ";" +
-         (dtype==DEAL_TYPE_BUY ? "BUY" : "SELL") +
-         ";0;0;0;" +
+         (dtype==DEAL_TYPE_BUY ? "BUY" : "SELL") + ";" +
+         DoubleToString(lot, 2) + ";" +
+         DoubleToString(sl, _Digits) + ";" +
+         DoubleToString(tp, _Digits) + ";" +
          (string)MasterMagic + ";" +
          (string)TimeCurrent()
       );
